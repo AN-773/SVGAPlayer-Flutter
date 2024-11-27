@@ -1,16 +1,16 @@
-library;
+library svgaplayer_flutter_player;
 
 import 'dart:math';
-import 'dart:typed_data';
-
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
-import 'package:path_drawing/path_drawing.dart';
-
-import 'parser.dart';
+// ignore: import_of_legacy_library_into_null_safe
+import 'audio_layer.dart';
 import 'proto/svga.pb.dart';
+// ignore: import_of_legacy_library_into_null_safe
 import 'proto/svga.pbserver.dart';
-
+import 'dart:typed_data';
+import 'package:path_drawing/path_drawing.dart';
+import 'parser.dart';
 part 'painter.dart';
 part 'simple_player.dart';
 
@@ -57,11 +57,12 @@ class SVGAImage extends StatefulWidget {
 
 class SVGAAnimationController extends AnimationController {
   MovieEntity? _videoItem;
+  final List<SVGAAudioLayer> _audioLayers = [];
   bool _canvasNeedsClear = false;
 
   SVGAAnimationController({
-    required super.vsync,
-  }) : super(duration: Duration.zero);
+    required TickerProvider vsync,
+  }) : super(vsync: vsync, duration: Duration.zero);
 
   set videoItem(MovieEntity? value) {
     assert(!_isDisposed, '$this has been disposed!');
@@ -89,6 +90,10 @@ class SVGAAnimationController extends AnimationController {
       if (fps == 0) fps = 20;
       duration =
           Duration(milliseconds: (movieParams.frames / fps * 1000).toInt());
+
+      for (var audio in value.audios) {
+        _audioLayers.add(SVGAAudioLayer(audio, value));
+      }
     } else {
       duration = Duration.zero;
     }
@@ -123,16 +128,25 @@ class SVGAAnimationController extends AnimationController {
 
   @override
   TickerFuture forward({double? from}) {
-    assert(
-      _videoItem != null,
-      'SVGAAnimationController.forward() called after dispose()?',
-    );
+    assert(_videoItem != null,
+        'SVGAAnimationController.forward() called after dispose()?');
     return super.forward(from: from);
+  }
+
+  @override
+  void stop({bool canceled = true}) {
+    for (final audio in _audioLayers) {
+      audio.pauseAudio();
+    }
+    super.stop(canceled: canceled);
   }
 
   bool _isDisposed = false;
   @override
   void dispose() {
+    for (final audio in _audioLayers) {
+      audio.dispose();
+    }
     // auto dispose _videoItem when set null
     videoItem = null;
     _isDisposed = true;
@@ -142,6 +156,7 @@ class SVGAAnimationController extends AnimationController {
 
 class _SVGAImageState extends State<SVGAImage> {
   MovieEntity? video;
+
   @override
   void initState() {
     super.initState();
@@ -163,19 +178,36 @@ class _SVGAImageState extends State<SVGAImage> {
   }
 
   void _handleChange() {
-    if (mounted &&
-        !widget._controller._isDisposed &&
-        video != widget._controller.videoItem) {
-      setState(() {
-        // rebuild
-        video = widget._controller.videoItem;
-      });
+    if (mounted) {
+      if (video == widget._controller.videoItem) {
+        handleAudio();
+      } else if (!widget._controller._isDisposed) {
+        setState(() {
+          // rebuild
+          video = widget._controller.videoItem;
+        });
+      }
     }
   }
 
   void _handleStatusChange(AnimationStatus status) {
     if (status == AnimationStatus.completed && widget.clearsAfterStop) {
       widget._controller.clear();
+    }
+  }
+
+  handleAudio() {
+    final audioLayers = widget._controller._audioLayers;
+    for (final audio in audioLayers) {
+      if (!audio.isPlaying() &&
+          audio.audioItem.startFrame <= widget._controller.currentFrame &&
+          audio.audioItem.endFrame >= widget._controller.currentFrame) {
+        audio.playAudio();
+      }
+      if (audio.isPlaying() &&
+          audio.audioItem.endFrame <= widget._controller.currentFrame) {
+        audio.stopAudio();
+      }
     }
   }
 
